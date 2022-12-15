@@ -2,7 +2,7 @@ import type { ActionArgs, LinksFunction, MetaFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Form, Link, useActionData, useSearchParams } from "@remix-run/react";
 
-import stylesUrl from "~/styles/login.css";
+import stylesUrl from "../styles/login.css";
 import { db } from "~/utils/db.server";
 import { badRequest } from "~/utils/request.server";
 import { createUserSession, login, register } from "~/utils/session.server";
