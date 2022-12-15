@@ -1,10 +1,8 @@
 node_modules
 
-.cache
-.env
-.vercel
-.output
-
-/build/
+/.cache
+/build
 /public/build
-/api/index.js
+
+/prisma/dev.db
+.env

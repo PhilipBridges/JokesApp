@@ -1,167 +1,220 @@
-// login.tsx
-import { useState, useEffect, useRef } from 'react'
-import { Layout } from '~/components/layout'
-import { FormField } from '~/components/form-field'
-import { validateEmail, validateName, validatePassword } from '~/utils/validators.server'
-import { ActionFunction, json, LoaderFunction, redirect } from '@remix-run/node'
-import { login, register, getUser } from '~/utils/auth.server'
-import { useActionData } from '@remix-run/react'
+import type { ActionArgs, LinksFunction, MetaFunction } from "@remix-run/node";
+import { json } from "@remix-run/node";
+import { Form, Link, useActionData, useSearchParams } from "@remix-run/react";
 
-export const loader: LoaderFunction = async ({ request }) => {
-    // If there's already a user in the session, redirect to the home page
-    return await getUser(request) ? redirect('/') : null
+import stylesUrl from "~/styles/login.css";
+import { db } from "~/utils/db.server";
+import { badRequest } from "~/utils/request.server";
+import { createUserSession, login, register } from "~/utils/session.server";
+
+export const meta: MetaFunction = () => ({
+  description: "Login to submit your own jokes to Remix Jokes!",
+  title: "Remix Jokes | Login",
+});
+
+export const links: LinksFunction = () => [
+  { rel: "stylesheet", href: stylesUrl },
+];
+
+function validateUsername(username: unknown) {
+  if (typeof username !== "string" || username.length < 3) {
+    return `Usernames must be at least 3 characters long`;
+  }
 }
 
-export const action: ActionFunction = async ({ request }) => {
-    const form = await request.formData();
-    const action = form.get("_action");
-    const email = form.get("email");
-    const password = form.get("password");
-    let firstName = form.get("firstName");
-    let lastName = form.get("lastName");
-
-    // If not all data was passed, error
-    if (
-        typeof action !== "string" ||
-        typeof email !== "string" ||
-        typeof password !== "string"
-    ) {
-        return json({ error: `Invalid Form Data`, form: action }, { status: 400 });
-    }
-
-    // If not all data was passed, error
-    if (
-        action === 'register' && (
-            typeof firstName !== "string" ||
-            typeof lastName !== "string"
-        )
-    ) {
-        return json({ error: `Invalid Form Data`, form: action }, { status: 400 });
-    }
-
-    // Validate email & password
-    const errors = {
-        email: validateEmail(email),
-        password: validatePassword(password),
-        ...(action === 'register' ? {
-            firstName: validateName(firstName as string || ''),
-            lastName: validateName(lastName as string || ''),
-        } : {})
-    };
-
-    //  If there were any errors, return them
-    if (Object.values(errors).some(Boolean))
-        return json({ errors, fields: { email, password, firstName, lastName }, form: action }, { status: 400 });
-
-    switch (action) {
-        case 'login': {
-            return await login({ email, password })
-        }
-        case 'register': {
-            firstName = firstName as string
-            lastName = lastName as string
-            return await register({ email, password, firstName, lastName })
-        }
-        default:
-            return json({ error: `Invalid Form Data` }, { status: 400 });
-    }
+function validatePassword(password: unknown) {
+  if (typeof password !== "string" || password.length < 6) {
+    return `Passwords must be at least 6 characters long`;
+  }
 }
+
+function validateUrl(url: string) {
+  let urls = ["/jokes", "/", "https://remix.run"];
+  if (urls.includes(url)) {
+    return url;
+  }
+  return "/jokes";
+}
+
+export const action = async ({ request }: ActionArgs) => {
+  const form = await request.formData();
+  const loginType = form.get("loginType");
+  const username = form.get("username");
+  const password = form.get("password");
+  // @ts-ignore
+  const redirectTo = validateUrl(form.get("redirectTo") || "/jokes");
+  if (
+    typeof loginType !== "string" ||
+    typeof username !== "string" ||
+    typeof password !== "string" ||
+    typeof redirectTo !== "string"
+  ) {
+    return badRequest({
+      fieldErrors: null,
+      fields: null,
+      formError: `Form not submitted correctly.`,
+    });
+  }
+
+  const fields = { loginType, username, password };
+  const fieldErrors = {
+    username: validateUsername(username),
+    password: validatePassword(password),
+  };
+  if (Object.values(fieldErrors).some(Boolean)) {
+    return badRequest({
+      fieldErrors,
+      fields,
+      formError: null,
+    });
+  }
+
+  switch (loginType) {
+    case "login": {
+      const user = await login({ username, password });
+      if (!user) {
+        return badRequest({
+          fieldErrors: null,
+          fields,
+          formError: `Username/Password combination is incorrect`,
+        });
+      }
+      return createUserSession(user.id, redirectTo);
+    }
+    case "register": {
+      const userExists = await db.user.findFirst({
+        where: { username },
+      });
+      if (userExists) {
+        return badRequest({
+          fieldErrors: null,
+          fields,
+          formError: `User with username ${username} already exists`,
+        });
+      }
+      const user = await register({ username, password });
+      if (!user) {
+        return badRequest({
+          fieldErrors: null,
+          fields,
+          formError: `Something went wrong trying to create a new user.`,
+        });
+      }
+      return createUserSession(user.id, redirectTo);
+    }
+    default: {
+      return badRequest({
+        fieldErrors: null,
+        fields,
+        formError: `Login type invalid`,
+      });
+    }
+  }
+};
 
 export default function Login() {
-    const actionData = useActionData()
-    const firstLoad = useRef(true)
-    const [action, setAction] = useState('login')
-    const [errors, setErrors] = useState(actionData?.errors || {})
-    const [formError, setFormError] = useState(actionData?.error || '')
-    const [formData, setFormData] = useState({
-        email: actionData?.fields?.email || '',
-        password: actionData?.fields?.password || '',
-        firstName: actionData?.fields?.lastName || '',
-        lastName: actionData?.fields?.firstName || '',
-    })
-
-    // Updates the form data when an input changes
-    const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>, field: string) => {
-        setFormData(form => ({ ...form, [field]: event.target.value }))
-    }
-
-    useEffect(() => {
-        // Clear the form if we switch forms
-        if (!firstLoad.current) {
-            const newState = {
-                email: '',
-                password: '',
-                firstName: '',
-                lastName: ''
-            }
-            setErrors(newState)
-            setFormError('')
-            setFormData(newState)
-        }
-    }, [action])
-
-    useEffect(() => {
-        if (!firstLoad.current) {
-            setFormError('')
-        }
-    }, [formData])
-
-    useEffect(() => {
-        // We don't want to reset errors on page load because we want to see them
-        firstLoad.current = false
-    }, [])
-
-    return (
-        <Layout>
-            <div className="h-full justify-center items-center flex flex-col gap-y-4">
-                {/* Form Switcher Button */}
-                <button
-                    onClick={() => setAction(action == 'login' ? 'register' : 'login')}
-                    className="absolute top-8 right-8 rounded-xl bg-yellow-300 font-semibold text-blue-600 px-3 py-2 transition duration-300 ease-in-out hover:bg-yellow-400 hover:-translate-y-1"
-                >{action === 'login' ? 'Sign Up' : 'Sign In'}</button>
-
-                <h2 className="text-5xl font-extrabold text-yellow-300">Welcome to Kudos!</h2>
-                <p className="font-semibold text-slate-300">{
-                    action === 'login' ? 'Log In To Give Some Praise!' : 'Sign Up To Get Started!'
-                }</p>
-                <form method="POST" className="rounded-2xl bg-gray-200 p-6 w-96">
-                    <div className="text-xs font-semibold text-center tracking-wide text-red-500 w-full">
-                        {formError}
-                    </div>
-                    <FormField
-                        htmlFor="email"
-                        label="Email"
-                        value={formData.email}
-                        onChange={e => handleInputChange(e, 'email')}
-                        error={errors?.email}
-                    />
-                    <FormField
-                        htmlFor="password"
-                        type="password"
-                        label="Password"
-                        value={formData.password}
-                        onChange={e => handleInputChange(e, 'password')}
-                        error={errors?.password}
-                    />
-
-                    {
-                        action === 'register' && <>
-                            {/* First Name */}
-                            <FormField htmlFor="firstName" label='First Name' onChange={e => handleInputChange(e, 'firstName')} value={formData.firstName} error={errors?.firstName} />
-                            {/* Last Name */}
-                            <FormField htmlFor="lastName" label='Last Name' onChange={e => handleInputChange(e, 'lastName')} value={formData.lastName} error={errors?.lastName} />
-                        </>
-                    }
-
-                    <div className="w-full text-center">
-                        <button type="submit" name="_action" value={action} className="rounded-xl mt-2 bg-yellow-300 px-3 py-2 text-blue-600 font-semibold transition duration-300 ease-in-out hover:bg-yellow-400 hover:-translate-y-1">
-                            {
-                                action === 'login' ? "Sign In" : "Sign Up"
-                            }
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </Layout>
-    )
+  const actionData = useActionData<typeof action>();
+  const [searchParams] = useSearchParams();
+  return (
+    <div className="container">
+      <div className="content" data-light="">
+        <h1>Login</h1>
+        <Form method="post">
+          <input
+            type="hidden"
+            name="redirectTo"
+            value={searchParams.get("redirectTo") ?? undefined}
+          />
+          <fieldset>
+            <legend className="sr-only">Login or Register?</legend>
+            <label>
+              <input
+                type="radio"
+                name="loginType"
+                value="login"
+                defaultChecked={
+                  !actionData?.fields?.loginType ||
+                  actionData?.fields?.loginType === "login"
+                }
+              />{" "}
+              Login
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="loginType"
+                value="register"
+                defaultChecked={actionData?.fields?.loginType === "register"}
+              />{" "}
+              Register
+            </label>
+          </fieldset>
+          <div>
+            <label htmlFor="username-input">Username</label>
+            <input
+              type="text"
+              id="username-input"
+              name="username"
+              defaultValue={actionData?.fields?.username}
+              aria-invalid={Boolean(actionData?.fieldErrors?.username)}
+              aria-errormessage={
+                actionData?.fieldErrors?.username ? "username-error" : undefined
+              }
+            />
+            {actionData?.fieldErrors?.username ? (
+              <p
+                className="form-validation-error"
+                role="alert"
+                id="username-error"
+              >
+                {actionData.fieldErrors.username}
+              </p>
+            ) : null}
+          </div>
+          <div>
+            <label htmlFor="password-input">Password</label>
+            <input
+              id="password-input"
+              name="password"
+              type="password"
+              defaultValue={actionData?.fields?.password}
+              aria-invalid={Boolean(actionData?.fieldErrors?.password)}
+              aria-errormessage={
+                actionData?.fieldErrors?.password ? "password-error" : undefined
+              }
+            />
+            {actionData?.fieldErrors?.password ? (
+              <p
+                className="form-validation-error"
+                role="alert"
+                id="password-error"
+              >
+                {actionData.fieldErrors.password}
+              </p>
+            ) : null}
+          </div>
+          <div id="form-error-message">
+            {actionData?.formError ? (
+              <p className="form-validation-error" role="alert">
+                {actionData.formError}
+              </p>
+            ) : null}
+          </div>
+          <button type="submit" className="button">
+            Submit
+          </button>
+        </Form>
+      </div>
+      <div className="links">
+        <ul>
+          <li>
+            <Link to="/">Home</Link>
+          </li>
+          <li>
+            <Link to="/jokes">Jokes</Link>
+          </li>
+        </ul>
+      </div>
+    </div>
+  );
 }
